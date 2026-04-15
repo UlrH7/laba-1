@@ -1,1 +1,478 @@
+# -*- coding: utf-8 -*-
+import json
+import os
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from datetime import datetime
+import re
+import random
 
+class ColorfulNotesApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🌈 Цветные Заметки")
+        self.root.geometry("1200x700")
+
+        # Яркие цвета для приложения
+        self.colors = {
+            'primary': '#FF6B6B',
+            'secondary': '#4ECDC4',
+            'accent': '#FFE66D',
+            'success': '#95E77E',
+            'warning': '#FFA62E',
+            'danger': '#FF4757',
+            'dark': '#2C3E50',
+            'light': '#F7F9FC',
+            'purple': '#A55EFF',
+            'pink': '#FF8C94'
+        }
+
+        # Файл для хранения заметок
+        self.notes_file = "notes.json"
+        self.notes = []
+        self.current_note_id = None
+
+        # Настройка стилей
+        self.setup_styles()
+
+        # Загружаем заметки
+        self.load_notes()
+
+        # Создаем интерфейс
+        self.create_ui()
+
+        # Привязываем горячие клавиши
+        self.setup_hotkeys()
+
+    def setup_styles(self):
+        """Настройка цветовых стилей"""
+        style = ttk.Style()
+        style.theme_use('clam')
+
+        style.configure("Custom.TButton",
+                        font=('Segoe UI', 10, 'bold'),
+                        padding=6)
+
+    def create_ui(self):
+        # Создаем главный фрейм с цветным фоном
+        self.main_frame = tk.Frame(self.root, bg=self.colors['light'])
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Верхняя панель
+        self.top_bar = tk.Frame(self.main_frame, bg=self.colors['primary'], height=80)
+        self.top_bar.pack(fill=tk.X)
+        self.top_bar.pack_propagate(False)
+
+        # Заголовок
+        title_label = tk.Label(self.top_bar,
+                               text="🌈 Цветные Заметки",
+                               font=('Segoe UI', 26, 'bold'),
+                               bg=self.colors['primary'],
+                               fg='white')
+        title_label.pack(side=tk.LEFT, padx=30, pady=20)
+
+        # Статистика
+        self.stats_label = tk.Label(self.top_bar,
+                                    text="Заметок: 0",
+                                    font=('Segoe UI', 12),
+                                    bg=self.colors['primary'],
+                                    fg='white')
+        self.stats_label.pack(side=tk.RIGHT, padx=30, pady=25)
+
+        # Панель инструментов
+        toolbar = tk.Frame(self.main_frame, bg=self.colors['dark'], height=60)
+        toolbar.pack(fill=tk.X)
+        toolbar.pack_propagate(False)
+
+        # Кнопки с яркими цветами
+        buttons = [
+            ("➕ Новая", self.new_note, self.colors['success']),
+            ("💾 Сохранить", self.save_current_note, self.colors['primary']),
+            ("🗑 Удалить", self.delete_current_note, self.colors['danger']),
+            ("🎨 Сменить тему", self.change_theme, self.colors['purple']),
+            ("📤 Экспорт MD", self.export_markdown, self.colors['warning']),
+            ("📥 Импорт MD", self.import_markdown, self.colors['secondary'])
+        ]
+
+        for text, command, color in buttons:
+            btn = tk.Button(toolbar, text=text, command=command,
+                            bg=color, fg='white', font=('Segoe UI', 11, 'bold'),
+                            padx=15, pady=8, relief=tk.FLAT, cursor='hand2',
+                            activebackground=self.lighten_color(color),
+                            activeforeground='white')
+            btn.pack(side=tk.LEFT, padx=8, pady=10)
+
+        # Поиск
+        search_frame = tk.Frame(toolbar, bg=self.colors['dark'])
+        search_frame.pack(side=tk.RIGHT, padx=15)
+
+        tk.Label(search_frame, text="🔍", bg=self.colors['dark'], fg='white',
+                 font=('Segoe UI', 14)).pack(side=tk.LEFT)
+
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', lambda *args: self.search_notes())
+        self.search_entry = tk.Entry(search_frame, textvariable=self.search_var,
+                                     font=('Segoe UI', 11), width=25,
+                                     bg='#34495E', fg='white', insertbackground='white',
+                                     relief=tk.FLAT, bd=2)
+        self.search_entry.pack(side=tk.LEFT, padx=8, pady=5)
+
+        # Основной контент
+        content_frame = tk.Frame(self.main_frame, bg='white', relief=tk.RAISED, bd=0)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # Список заметок (левая панель)
+        left_panel = tk.Frame(content_frame, bg='white')
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 20))
+
+        # Заголовок списка
+        list_header = tk.Frame(left_panel, bg=self.colors['primary'], height=40)
+        list_header.pack(fill=tk.X)
+        list_header.pack_propagate(False)
+
+        tk.Label(list_header, text="📝 Мои заметки",
+                 font=('Segoe UI', 12, 'bold'),
+                 bg=self.colors['primary'], fg='white').pack(pady=10)
+
+        # Canvas для списка заметок с прокруткой
+        list_container = tk.Frame(left_panel, bg='white')
+        list_container.pack(fill=tk.BOTH, expand=True)
+
+        list_canvas = tk.Canvas(list_container, bg='white', highlightthickness=0)
+        scrollbar = tk.Scrollbar(list_container, orient="vertical", command=list_canvas.yview)
+
+        self.notes_frame = tk.Frame(list_canvas, bg='white')
+        list_canvas.create_window((0, 0), window=self.notes_frame, anchor="nw")
+
+        list_canvas.configure(yscrollcommand=scrollbar.set)
+
+        list_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.notes_frame.bind("<Configure>", lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all")))
+
+        # Правая панель (редактирование)
+        right_panel = tk.Frame(content_frame, bg='white', relief=tk.RAISED, bd=1)
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Заголовок заметки
+        title_frame = tk.Frame(right_panel, bg='white')
+        title_frame.pack(fill=tk.X, padx=20, pady=20)
+
+        tk.Label(title_frame, text="📌 Заголовок",
+                 font=('Segoe UI', 12, 'bold'),
+                 bg='white', fg=self.colors['primary']).pack(anchor=tk.W)
+
+        self.title_entry = tk.Entry(title_frame, font=('Segoe UI', 14, 'bold'),
+                                    bg='#F0F0F0', fg=self.colors['dark'],
+                                    relief=tk.FLAT, bd=1, insertbackground=self.colors['primary'])
+        self.title_entry.pack(fill=tk.X, pady=(8, 0), ipady=8)
+
+        # Текст заметки
+        text_frame = tk.Frame(right_panel, bg='white')
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+
+        tk.Label(text_frame, text="📄 Содержание",
+                 font=('Segoe UI', 12, 'bold'),
+                 bg='white', fg=self.colors['primary']).pack(anchor=tk.W, pady=(0, 8))
+
+        text_container = tk.Frame(text_frame, bg='#F0F0F0', relief=tk.FLAT, bd=1)
+        text_container.pack(fill=tk.BOTH, expand=True)
+
+        text_scrollbar = tk.Scrollbar(text_container)
+        text_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.content_text = tk.Text(text_container, wrap=tk.WORD,
+                                    font=('Segoe UI', 11),
+                                    bg='#F0F0F0', fg=self.colors['dark'],
+                                    yscrollcommand=text_scrollbar.set,
+                                    relief=tk.FLAT, padx=10, pady=10,
+                                    insertbackground=self.colors['primary'])
+        self.content_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        text_scrollbar.config(command=self.content_text.yview)
+
+        # Информационная панель
+        info_frame = tk.Frame(right_panel, bg='white', height=40)
+        info_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+        info_frame.pack_propagate(False)
+
+        self.info_label = tk.Label(info_frame, text="",
+                                   font=('Segoe UI', 9),
+                                   bg='white', fg='#7F8C8D')
+        self.info_label.pack(side=tk.LEFT)
+
+        # Кнопка смены цвета заметки
+        color_btn = tk.Button(info_frame, text="🎨 Цвет заметки",
+                              command=self.change_note_color,
+                              bg=self.colors['accent'], fg=self.colors['dark'],
+                              font=('Segoe UI', 9, 'bold'),
+                              relief=tk.FLAT, cursor='hand2')
+        color_btn.pack(side=tk.RIGHT, padx=5)
+
+        # Обновляем список
+        self.update_notes_list()
+
+        # Если есть заметки, выбираем первую
+        if self.notes:
+            self.load_note_content(self.notes[0]['id'])
+
+    def lighten_color(self, color):
+        """Осветление цвета для эффекта наведения"""
+        # Убираем # если есть
+        color = color.lstrip('#')
+        rgb = tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
+        lighter = tuple(min(255, c + 40) for c in rgb)
+        return '#{:02x}{:02x}{:02x}'.format(*lighter)
+
+    def change_theme(self):
+        """Смена цветовой темы приложения"""
+        themes = [
+            {'primary': '#FF6B6B', 'secondary': '#4ECDC4', 'accent': '#FFE66D', 'dark': '#2C3E50'},
+            {'primary': '#4ECDC4', 'secondary': '#FFE66D', 'accent': '#FF6B6B', 'dark': '#2C3E50'},
+            {'primary': '#A55EFF', 'secondary': '#FF8C94', 'accent': '#FFE66D', 'dark': '#2C3E50'},
+            {'primary': '#FF8C94', 'secondary': '#A55EFF', 'accent': '#4ECDC4', 'dark': '#2C3E50'},
+            {'primary': '#95E77E', 'secondary': '#FFA62E', 'accent': '#FF6B6B', 'dark': '#2C3E50'}
+        ]
+
+        theme = random.choice(themes)
+        self.colors.update(theme)
+
+        # Обновляем верхнюю панель
+        self.top_bar.configure(bg=self.colors['primary'])
+        for widget in self.top_bar.winfo_children():
+            if isinstance(widget, tk.Label):
+                widget.configure(bg=self.colors['primary'])
+
+        messagebox.showinfo("Тема изменена", "Цветовая схема приложения обновлена!", parent=self.root)
+
+    def change_note_color(self):
+        """Изменение цвета фона текущей заметки"""
+        if self.current_note_id:
+            colors = ['#FFF5E6', '#FFE6F0', '#E6F0FF', '#F0FFE6', '#FFF0E6', '#E6FFFF', '#FFE6E6', '#F0E6FF', '#FFF0F5',
+                      '#F0FFF0']
+            random_color = random.choice(colors)
+
+            # Сохраняем цвет заметки
+            for note in self.notes:
+                if note['id'] == self.current_note_id:
+                    note['color'] = random_color
+                    break
+
+            # Обновляем цвета в интерфейсе
+            self.title_entry.configure(bg=random_color)
+            self.content_text.configure(bg=random_color)
+            self.save_notes_to_file()
+            self.update_notes_list()
+
+    def setup_hotkeys(self):
+        """Настройка горячих клавиш"""
+        self.root.bind('<Control-s>', lambda e: self.save_current_note())
+        self.root.bind('<Control-n>', lambda e: self.new_note())
+        self.root.bind('<Control-f>', lambda e: self.search_entry.focus())
+        self.root.bind('<Control-c>', lambda e: self.change_note_color())
+
+    def load_notes(self):
+        """Загрузка заметок из файла"""
+        if os.path.exists(self.notes_file):
+            try:
+                with open(self.notes_file, 'r', encoding='utf-8') as f:
+                    self.notes = json.load(f)
+                # Добавляем цвет для старых заметок, если его нет
+                for note in self.notes:
+                    if 'color' not in note:
+                        note['color'] = '#FFFFFF'
+            except:
+                self.notes = []
+        else:
+            # Создаем пример заметки
+            self.notes = [{
+                'id': 1,
+                'title': 'Добро пожаловать!',
+                'content': '# Добро пожаловать в цветное приложение Заметки\n\nЭто приложение имеет яркий и красочный интерфейс.\n\n## Возможности:\n- Яркие цвета\n- Смена цветовых тем\n- Изменение цвета заметок\n- Создание, редактирование, удаление\n- Поиск\n- Экспорт/импорт в Markdown\n\n**Наслаждайтесь использованием!**',
+                'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'modified': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'color': '#FFF5E6'
+            }]
+            self.save_notes_to_file()
+
+    def save_notes_to_file(self):
+        """Сохранение заметок в файл"""
+        with open(self.notes_file, 'w', encoding='utf-8') as f:
+            json.dump(self.notes, f, ensure_ascii=False, indent=2)
+
+    def update_notes_list(self):
+        """Обновление списка заметок с цветными карточками"""
+        for widget in self.notes_frame.winfo_children():
+            widget.destroy()
+
+        search_text = self.search_var.get().lower()
+        filtered_notes = self.notes
+        if search_text:
+            filtered_notes = [note for note in self.notes
+                              if search_text in note['title'].lower()
+                              or search_text in note['content'].lower()]
+
+        # Обновляем статистику
+        self.stats_label.config(text="Заметок: {}".format(len(filtered_notes)))
+
+        for note in filtered_notes:
+            # Создаем цветную карточку заметки
+            card_color = note.get('color', '#FFFFFF')
+            note_card = tk.Frame(self.notes_frame, bg=card_color, relief=tk.RAISED, bd=1)
+            note_card.pack(fill=tk.X, pady=5, padx=5)
+
+            # Заголовок заметки
+            title_label = tk.Label(note_card, text=note['title'],
+                                   font=('Segoe UI', 11, 'bold'),
+                                   bg=card_color, fg=self.colors['dark'],
+                                   cursor='hand2')
+            title_label.pack(anchor=tk.W, padx=12, pady=(12, 5))
+            title_label.bind('<Button-1>', lambda e, n=note: self.load_note_content(n['id']))
+
+            # Дата создания
+            date_label = tk.Label(note_card, text=note['created'][:10],
+                                  font=('Segoe UI', 8),
+                                  bg=card_color, fg='#7F8C8D')
+            date_label.pack(anchor=tk.W, padx=12, pady=(0, 10))
+            date_label.bind('<Button-1>', lambda e, n=note: self.load_note_content(n['id']))
+
+            # Индикатор выделения
+            if self.current_note_id == note['id']:
+                note_card.configure(bd=2, relief=tk.SOLID)
+
+    def search_notes(self):
+        """Поиск по заметкам"""
+        self.update_notes_list()
+
+    def load_note_content(self, note_id):
+        """Загрузка содержимого заметки"""
+        note = next((n for n in self.notes if n['id'] == note_id), None)
+        if note:
+            self.current_note_id = note_id
+            self.title_entry.delete(0, tk.END)
+            self.title_entry.insert(0, note['title'])
+
+            self.content_text.delete(1.0, tk.END)
+            self.content_text.insert(1.0, note['content'])
+
+            # Устанавливаем цвет фона
+            bg_color = note.get('color', '#FFFFFF')
+            self.title_entry.configure(bg=bg_color)
+            self.content_text.configure(bg=bg_color)
+
+            self.info_label.config(text="Создано: {} | Изменено: {}".format(note['created'], note['modified']))
+            self.update_notes_list()
+
+    def new_note(self):
+        """Создание новой заметки"""
+        new_id = max([note['id'] for note in self.notes], default=0) + 1
+        new_note = {
+            'id': new_id,
+            'title': 'Новая заметка',
+            'content': '',
+            'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'modified': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'color': '#FFF5E6'
+        }
+
+        self.notes.append(new_note)
+        self.save_notes_to_file()
+        self.update_notes_list()
+        self.load_note_content(new_id)
+
+    def save_current_note(self):
+        """Сохранение текущей заметки"""
+        if self.current_note_id:
+            title = self.title_entry.get().strip()
+            if not title:
+                title = "Без заголовка"
+
+            content = self.content_text.get(1.0, tk.END).strip()
+
+            for note in self.notes:
+                if note['id'] == self.current_note_id:
+                    note['title'] = title
+                    note['content'] = content
+                    note['modified'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    break
+
+            self.save_notes_to_file()
+            self.update_notes_list()
+            self.load_note_content(self.current_note_id)
+            messagebox.showinfo("Успех", "Заметка сохранена!", parent=self.root)
+
+    def delete_current_note(self):
+        """Удаление текущей заметки"""
+        if self.current_note_id and messagebox.askyesno("Подтверждение", "Удалить эту заметку?", parent=self.root):
+            self.notes = [note for note in self.notes if note['id'] != self.current_note_id]
+            self.save_notes_to_file()
+            self.current_note_id = None
+            self.title_entry.delete(0, tk.END)
+            self.content_text.delete(1.0, tk.END)
+            self.info_label.config(text="")
+            self.update_notes_list()
+
+            if self.notes:
+                self.load_note_content(self.notes[0]['id'])
+
+    def export_markdown(self):
+        """Экспорт в Markdown"""
+        if self.current_note_id:
+            note = next((n for n in self.notes if n['id'] == self.current_note_id), None)
+            if note:
+                filename = filedialog.asksaveasfilename(
+                    defaultextension=".md",
+                    filetypes=[("Markdown files", "*.md"), ("All files", "*.*")],
+                    initialfile="{}.md".format(note['title'])
+                )
+                if filename:
+                    with open(filename, 'w', encoding='utf-8') as f:
+                        f.write("# {}\n\n".format(note['title']))
+                        f.write("*Создано: {}*\n".format(note['created']))
+                        f.write("*Изменено: {}*\n\n".format(note['modified']))
+                        f.write(note['content'])
+                    messagebox.showinfo("Успех", "Заметка экспортирована!", parent=self.root)
+
+    def import_markdown(self):
+        """Импорт из Markdown"""
+        filename = filedialog.askopenfilename(
+            filetypes=[("Markdown files", "*.md"), ("All files", "*.*")]
+        )
+        if filename:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                title = os.path.splitext(os.path.basename(filename))[0]
+                title_match = re.search(r'^# (.+)$', content, re.MULTILINE)
+                if title_match:
+                    title = title_match.group(1)
+                    content = re.sub(r'^# .+\n\n?', '', content, count=1, flags=re.MULTILINE)
+
+                new_id = max([note['id'] for note in self.notes], default=0) + 1
+                new_note = {
+                    'id': new_id,
+                    'title': title,
+                    'content': content.strip(),
+                    'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'modified': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'color': '#FFF5E6'
+                }
+
+                self.notes.append(new_note)
+                self.save_notes_to_file()
+                self.update_notes_list()
+                self.load_note_content(new_id)
+                messagebox.showinfo("Успех", "Заметка импортирована!", parent=self.root)
+
+            except Exception as e:
+                messagebox.showerror("Ошибка", "Не удалось импортировать файл: {}".format(str(e)), parent=self.root)
+
+
+def main():
+    root = tk.Tk()
+    app = ColorfulNotesApp(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
